@@ -218,21 +218,33 @@ export class DbPathService {
   scanWxidCandidates(rootPath: string): WxidInfo[] {
     const wxids: WxidInfo[] = []
 
+    const scanOneLevelForCandidates = (scanPath: string) => {
+      if (!existsSync(scanPath)) return
+      const entries = readdirSync(scanPath)
+      for (const entry of entries) {
+        const entryPath = join(scanPath, entry)
+        let stat: ReturnType<typeof statSync>
+        try { stat = statSync(entryPath) } catch { continue }
+        if (!stat.isDirectory()) continue
+        const lower = entry.toLowerCase()
+        if (lower === 'all_users') continue
+        if (!entry.includes('_')) continue
+        wxids.push({ wxid: entry, modifiedTime: stat.mtimeMs })
+      }
+    }
+
     try {
-      if (existsSync(rootPath)) {
-        const entries = readdirSync(rootPath)
-        for (const entry of entries) {
-          const entryPath = join(rootPath, entry)
-          let stat: ReturnType<typeof statSync>
-          try { stat = statSync(entryPath) } catch { continue }
-          if (!stat.isDirectory()) continue
-          const lower = entry.toLowerCase()
-          if (lower === 'all_users') continue
-          if (!entry.includes('_')) continue
-          wxids.push({ wxid: entry, modifiedTime: stat.mtimeMs })
+      scanOneLevelForCandidates(rootPath)
+
+      // 兜底：往下再找一层（兼容 2.0b4.0.9/xwechat_files/wxid_xxx 结构）
+      if (wxids.length === 0 && existsSync(rootPath)) {
+        const subDirs = readdirSync(rootPath)
+        for (const sub of subDirs) {
+          const subPath = join(rootPath, sub)
+          try { if (!statSync(subPath).isDirectory()) continue } catch { continue }
+          scanOneLevelForCandidates(subPath)
         }
       }
-
 
       if (wxids.length === 0) {
         const rootName = basename(rootPath)
@@ -281,6 +293,25 @@ export class DbPathService {
         const fullPath = join(rootPath, account)
         const modifiedTime = this.getAccountModifiedTime(fullPath)
         wxids.push({ wxid: account, modifiedTime })
+      }
+
+      // 兜底：如果一层找不到，尝试往下再找一层子目录（兼容 2.0b4.0.9/xwechat_files/wxid_xxx 结构）
+      if (wxids.length === 0) {
+        try {
+          const subDirs = readdirSync(rootPath)
+          for (const sub of subDirs) {
+            const subPath = join(rootPath, sub)
+            try {
+              if (!statSync(subPath).isDirectory()) continue
+            } catch { continue }
+            const subAccounts = this.findAccountDirs(subPath)
+            for (const account of subAccounts) {
+              const fullPath = join(subPath, account)
+              const modifiedTime = this.getAccountModifiedTime(fullPath)
+              wxids.push({ wxid: account, modifiedTime })
+            }
+          }
+        } catch { }
       }
     } catch { }
 
